@@ -16,6 +16,9 @@ Was in Rhino ankommt:
 - **Dokument-Benutzertext**: Quelldatei, Schema, Projekt und Georeferenzierung (`IfcMapConversion.*`).
 - Optional **Blöcke** für mehrfach platzierte Typen und **nur die Gebäudehülle**.
 
+**Ausführliche Anleitung** (Installation, Optionen, Befehle, Arbeitsabläufe, Fehlerbehebung):
+[docs/ANLEITUNG.md](docs/ANLEITUNG.md)
+
 ## Wie es funktioniert
 
 Das Plugin baut die Geometrie nicht selbst, sondern nutzt den
@@ -35,12 +38,14 @@ Fortschritt steht in der Befehlszeile und in der Statusleiste, **Esc bricht ab**
    Alternativ geht ein Python ≥ 3.10 mit dem Paket `ifc_converter` (`pip install` aus dem Converter-Repo).
    Für den Fortschritt in Prozent braucht es einen Converter mit `IFC_CONVERTER_PROGRESS`-Unterstützung
    (ab der Version nach 0.9.8); ältere Versionen funktionieren auch, zeigen aber nur die verstrichene Zeit.
-2. **Plugin installieren**, eine der beiden Arten:
-   - **Yak-Paket**: `rhino-ifc-plugin-….yak` auf das Rhino-Fenster ziehen, oder in Rhino
+2. **Plugin installieren** aus den [Releases](https://github.com/Sh4wN98/Rhino-IFC-Plugin/releases/latest),
+   eine der beiden Arten (nicht beide):
+   - **Yak-Paket** (empfohlen): `rhino-ifc-plugin-….yak` auf das Rhino-Fenster ziehen, oder in Rhino
      `_PackageManager` › Datei installieren.
-   - **Direkt**: `RhinoIfc.rhp` auf das Rhino-Fenster ziehen (oder `_PluginManager` › Installieren).
-     `RhinoIfc.Core.dll` muss im selben Ordner wie die `.rhp` liegen.
+   - **Direkt**: `RhinoIfc-….zip` in einen festen Ordner entpacken und `RhinoIfc.rhp` auf das Rhino-Fenster
+     ziehen (oder `_PlugInManager` › Installieren). `RhinoIfc.Core.dll` muss im selben Ordner wie die `.rhp` liegen.
 3. Rhino neu starten. Danach steht **IFC (\*.ifc, \*.ifczip)** in den Dateitypen von Öffnen und Importieren.
+   Das Plugin lädt sich bei Bedarf von selbst, es muss nicht gestartet werden.
 
 ## Benutzung
 
@@ -78,6 +83,9 @@ Ergebnis: `src/RhinoIfc/bin/Release/net48/RhinoIfc.rhp` und `RhinoIfc.Core.dll`.
 Das Plugin ist für .NET Framework 4.8 gebaut und läuft damit in beiden Laufzeiten von Rhino 8
 (.NET Core, Standard, und .NET Framework).
 
+**Release**: Ein Tag `v1.2.3` (`git tag v1.2.3 && git push origin v1.2.3`) baut über
+`.github/workflows/release.yml` das Yak-Paket und eine zip-Datei und legt beides als GitHub-Release an.
+
 ## Aufbau
 
 | Pfad | Inhalt |
@@ -88,6 +96,8 @@ Das Plugin ist für .NET Framework 4.8 gebaut und läuft damit in beiden Laufzei
 | `src/RhinoIfc/Import/IImportPostProcessor.cs` | Erweiterungspunkt für Schritte nach dem Import, z. B. **Meshes in Polyflächen umwandeln** (kommt später; bekommt die Ids der importierten Objekte samt IFC-Benutzertext). |
 | `src/RhinoIfc/Commands/` | `IfcImport`, `IfcSelect`, `IfcProperties`, `IfcConverter`. |
 | `yak/manifest.yml`, `build.ps1` | Yak-Paket. |
+| `.github/workflows/` | `build.yml` (Tests und Build bei jedem Push auf main und Pull Request), `release.yml` (Release bei Tag `v*`). |
+| `docs/ANLEITUNG.md` | Anleitung für Anwender. |
 
 ### Fortschritt aus dem Converter
 
