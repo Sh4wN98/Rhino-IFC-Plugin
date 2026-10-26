@@ -1,0 +1,16 @@
+---
+name: rhino-ifc-plugin
+version: 0.1.0
+authors:
+- Jonas
+description: >
+  Öffnet und importiert IFC-Dateien (.ifc, .ifczip) in Rhino 8: Polyflächen oder Meshes,
+  Layer nach Geschoss und IFC-Klasse, Farben und Materialien, Property-Sets als Benutzertext.
+  Die Umwandlung macht der IFC Converter (https://github.com/Sh4wN98/IFC-Converter), der
+  einmal installiert sein muss.
+url: https://github.com/Sh4wN98/Rhino-IFC-Plugin
+keywords:
+- ifc
+- bim
+- import
+- ifczip

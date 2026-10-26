@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Everything that does not need Rhino: finding the converter, its command line, reading its output.
+       Tested on any platform with tests/RhinoIfc.Core.Tests. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>RhinoIfc.Core</RootNamespace>
+  </PropertyGroup>
+</Project>

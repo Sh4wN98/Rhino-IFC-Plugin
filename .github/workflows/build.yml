@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Tests (Kern ohne Rhino)
+        run: dotnet test tests/RhinoIfc.Core.Tests -c Release
+      - name: Plugin bauen
+        run: dotnet build src/RhinoIfc/RhinoIfc.csproj -c Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RhinoIfc-plugin
+          path: |
+            src/RhinoIfc/bin/Release/net48/RhinoIfc.rhp
+            src/RhinoIfc/bin/Release/net48/RhinoIfc.Core.dll
+            yak/manifest.yml

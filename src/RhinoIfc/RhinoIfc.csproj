@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- .NET Framework 4.8 runs in both runtimes of Rhino 8 (.NET 7/8 by default, Framework with SetDotNetRuntime). -->
+    <TargetFramework>net48</TargetFramework>
+    <TargetExt>.rhp</TargetExt>
+    <AssemblyName>RhinoIfc</AssemblyName>
+    <RootNamespace>RhinoIfc</RootNamespace>
+    <Title>IFC Import</Title>
+    <Description>Öffnet und importiert IFC-Dateien (.ifc, .ifczip) in Rhino 8, mit dem IFC Converter als Backend.</Description>
+    <GenerateResourceUsePreserializedResources>false</GenerateResourceUsePreserializedResources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 8.0.23304.9001 is the first Rhino 8 release, so the plugin loads in every Rhino 8. -->
+    <PackageReference Include="RhinoCommon" Version="8.0.23304.9001" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RhinoIfc.Core\RhinoIfc.Core.csproj" />
+  </ItemGroup>
+</Project>
