@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to commit SHAs like the IFC Converter's workflows; ubuntu-latest has the .NET 8 SDK.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Tests (Kern ohne Rhino)
+        run: dotnet test tests/RhinoIfc.Core.Tests -c Release
+      - name: Plugin bauen
+        run: dotnet build src/RhinoIfc/RhinoIfc.csproj -c Release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: RhinoIfc-plugin
+          path: |
+            src/RhinoIfc/bin/Release/net48/RhinoIfc.rhp
+            src/RhinoIfc/bin/Release/net48/RhinoIfc.Core.dll
+            yak/manifest.yml

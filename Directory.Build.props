@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Jonas</Authors>
+    <Copyright>GPL-3.0-or-later</Copyright>
+    <LangVersion>10</LangVersion>
+    <Nullable>disable</Nullable>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,49 @@
+name: release
+
+# A tag v1.2.3 builds the plugin, packs it for Rhino's Package Manager (Yak) and as a zip,
+# and publishes both as the GitHub release v1.2.3. The version comes from the tag.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows, because Yak.exe (McNeel's package tool) runs on Windows; the runner has the .NET 8 SDK.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - name: Version aus dem Tag
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Tag $env:GITHUB_REF_NAME ist keine Version wie v1.2.3" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+      - name: Tests (Kern ohne Rhino)
+        run: dotnet test tests/RhinoIfc.Core.Tests -c Release
+      - name: Plugin bauen
+        run: dotnet build src/RhinoIfc/RhinoIfc.csproj -c Release -p:Version=${{ env.VERSION }}
+      - name: Pakete (Yak und zip)
+        shell: pwsh
+        run: |
+          $bin = "src/RhinoIfc/bin/Release/net48"
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item "$bin/RhinoIfc.rhp", "$bin/RhinoIfc.Core.dll", LICENSE dist
+          (Get-Content yak/manifest.yml -Encoding utf8) -replace '^version: .*', "version: $env:VERSION" |
+            Set-Content dist/manifest.yml -Encoding utf8
+          Invoke-WebRequest https://files.mcneel.com/yak/tools/latest/yak.exe -OutFile yak.exe
+          Push-Location dist
+          ../yak.exe build --platform win
+          if ($LASTEXITCODE -ne 0) { throw "yak build fehlgeschlagen" }
+          Pop-Location
+          Compress-Archive dist/RhinoIfc.rhp, dist/RhinoIfc.Core.dll, dist/LICENSE "dist/RhinoIfc-$env:VERSION.zip"
+          Get-ChildItem dist
+      - name: GitHub-Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(Get-ChildItem dist -Filter *.yak) + @(Get-ChildItem dist -Filter *.zip) | ForEach-Object FullName
+          gh release create $env:GITHUB_REF_NAME @files --title "Rhino IFC Plugin $env:VERSION" --generate-notes
