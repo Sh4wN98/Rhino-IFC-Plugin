@@ -97,12 +97,41 @@ namespace RhinoIfc.Core.Tests
             Assert.Equal(exe, locator.Find("").FileName);
         }
 
+        private static string Absolute(string folder) => Path.Combine(Path.GetTempPath(), folder);
+
         [Fact]
         public void PathEntries()
         {
-            var exe = Path.Combine("bin", "ifc-convert.exe");
-            var locator = Locator(new HashSet<string> { exe }, new Dictionary<string, string> { ["PATH"] = "nothing;\"bin\"" });
+            var bin = Absolute("bin");
+            var exe = Path.Combine(bin, "ifc-convert.exe");
+            var locator = Locator(new HashSet<string> { exe }, new Dictionary<string, string> { ["PATH"] = $"nothing;\"{bin}\"" });
             Assert.Equal(exe, locator.Find(null).FileName);
+        }
+
+        [Fact]
+        public void RelativePathEntriesAreNotSearched()
+        {
+            // ".\ifc-convert.exe" or "bin\python.exe" would be found in Rhino's current folder.
+            var planted = new HashSet<string> { Path.Combine(".", "ifc-convert.exe"), Path.Combine("bin", "python.exe") };
+            var asked = new List<string>();
+            var locator = Locator(planted, new Dictionary<string, string> { ["PATH"] = ".;bin" },
+                python: (program, arguments) => { asked.Add(program); return true; });
+            Assert.Null(locator.Find(""));
+            Assert.Empty(asked);
+        }
+
+        [Theory]
+        [InlineData(@"C:\Program Files\IFC Converter", true)]
+        [InlineData("C:/tools", true)]
+        [InlineData(@"\\server\share\bin", true)]
+        [InlineData(@"C:tools", false)]
+        [InlineData(@"\tools", false)]
+        [InlineData(".", false)]
+        [InlineData("bin", false)]
+        [InlineData("", false)]
+        public void FullyQualifiedWindowsPaths(string path, bool expected)
+        {
+            Assert.Equal(expected, ConverterLocator.IsFullyQualified(path));
         }
 
         [Fact]
@@ -260,6 +289,47 @@ print('✓ ' + sys.argv[1] + ' → out (7 elements)')
             Assert.Single(run.Warnings);
             Assert.True(File.Exists(output));
             File.Delete(output);
+        }
+
+        [Fact]
+        public void StartsInTheProgramsFolderNotTheCurrentOne()
+        {
+            var folder = Path.Combine(Path.GetTempPath(), $"converter-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var program = Path.Combine(folder, "ifc-convert.exe");
+                Assert.Equal(folder, ConverterProcess.WorkingDirectory(program));
+                Assert.NotEqual(Environment.CurrentDirectory, ConverterProcess.WorkingDirectory("ifc-convert.exe"));
+            }
+            finally
+            {
+                Directory.Delete(folder, true);
+            }
+        }
+
+        [Fact]
+        public void PythonDoesNotImportFromTheCurrentFolder()
+        {
+            // A module planted in Rhino's current folder (e.g. next to an opened file) must not be imported.
+            var python = Python();
+            if (python == null)
+                return;
+            var planted = Path.Combine(Path.GetTempPath(), $"planted-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path.Combine(planted, "ifc_converter"));
+            File.WriteAllText(Path.Combine(planted, "ifc_converter", "__init__.py"), "");
+            File.WriteAllText(Path.Combine(planted, "ifc_converter", "cli.py"), "");
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = planted;
+                Assert.False(ConverterProcess.PythonHasConverter(python, new string[0]));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+                Directory.Delete(planted, true);
+            }
         }
 
         [Fact]

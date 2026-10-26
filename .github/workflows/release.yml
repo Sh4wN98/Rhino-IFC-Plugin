@@ -6,20 +6,24 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
+# Nothing by default; only the publish job, which runs no downloaded or built code, may write.
+permissions: {}
 
 jobs:
-  release:
+  build:
     # Windows, because Yak.exe (McNeel's package tool) runs on Windows; the runner has the .NET 8 SDK.
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
       - name: Version aus dem Tag
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Tag $env:GITHUB_REF_NAME ist keine Version wie v1.2.3" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Tag $env:GITHUB_REF_NAME ist keine Version wie v1.2.3" }
           "VERSION=$version" >> $env:GITHUB_ENV
       - name: Tests (Kern ohne Rhino)
         run: dotnet test tests/RhinoIfc.Core.Tests -c Release
@@ -34,16 +38,46 @@ jobs:
           (Get-Content yak/manifest.yml -Encoding utf8) -replace '^version: .*', "version: $env:VERSION" |
             Set-Content dist/manifest.yml -Encoding utf8
           Invoke-WebRequest https://files.mcneel.com/yak/tools/latest/yak.exe -OutFile yak.exe
+          # Hash and signature are logged, so a changed yak.exe shows in the run; once known, the hash can be pinned here.
+          # The token of this job can only read, so yak.exe cannot change the repository or the releases.
+          Write-Host "yak.exe SHA256: $((Get-FileHash yak.exe -Algorithm SHA256).Hash)"
+          $signature = Get-AuthenticodeSignature yak.exe
+          Write-Host "yak.exe Signatur: $($signature.Status) $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -eq 'HashMismatch') { throw "yak.exe ist verändert (Signatur passt nicht)" }
+          if ($signature.Status -ne 'Valid') { Write-Host "::warning::yak.exe ist nicht gültig signiert ($($signature.Status))" }
           Push-Location dist
           ../yak.exe build --platform win
           if ($LASTEXITCODE -ne 0) { throw "yak build fehlgeschlagen" }
           Pop-Location
           Compress-Archive dist/RhinoIfc.rhp, dist/RhinoIfc.Core.dll, dist/LICENSE "dist/RhinoIfc-$env:VERSION.zip"
-          Get-ChildItem dist
+          New-Item -ItemType Directory release | Out-Null
+          Copy-Item dist/*.yak, dist/*.zip release
+          Push-Location release
+          Get-ChildItem -File | ForEach-Object { "$((Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } |
+            Set-Content SHA256SUMS.txt -Encoding ascii
+          Get-Content SHA256SUMS.txt
+          Pop-Location
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: release
+          path: release/
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
+        with:
+          name: release
+          path: release
       - name: GitHub-Release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = @(Get-ChildItem dist -Filter *.yak) + @(Get-ChildItem dist -Filter *.zip) | ForEach-Object FullName
-          gh release create $env:GITHUB_REF_NAME @files --title "Rhino IFC Plugin $env:VERSION" --generate-notes
+          set -euo pipefail
+          (cd release && sha256sum -c SHA256SUMS.txt)
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Rhino IFC Plugin ${GITHUB_REF_NAME#v}" --generate-notes

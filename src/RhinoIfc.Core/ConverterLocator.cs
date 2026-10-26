@@ -116,8 +116,25 @@ namespace RhinoIfc.Core
             return _fileExists(path) ? ConverterBackend.Executable(path, $"{description}: {path}") : null;
         }
 
+        /// <summary>The absolute PATH entries. A relative one (".", "bin") would be looked up in Rhino's current
+        /// folder, often the folder of an opened file, where anyone could place an ifc-convert.exe or python.exe.</summary>
         private IEnumerable<string> PathFolders() =>
-            (_environment("PATH") ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            (_environment("PATH") ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim().Trim('"'))
+                .Where(IsFullyQualified);
+
+        /// <summary>Whether a path names its folder without depending on the current folder or drive:
+        /// C:\… or \\server\… (on Linux and macOS, where the tests run, /…).</summary>
+        public static bool IsFullyQualified(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return false;
+            if (path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/'))
+                return true;
+            if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
+                return true;
+            return Path.DirectorySeparatorChar == '/' && path[0] == '/';
+        }
 
         /// <summary>The py launcher asking for any Python 3, python.exe on PATH and the per-user installs
         /// of Python 3.10 to 3.14.</summary>
