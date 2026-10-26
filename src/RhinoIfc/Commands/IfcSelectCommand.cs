@@ -51,10 +51,11 @@ namespace RhinoIfc.Commands
                 return Result.Cancel;
 
             int count = 0;
+            bool classes = key == "IfcClass";
             foreach (var obj in objects)
             {
                 var value = obj.Attributes.GetUserString(key);
-                if (value != null && patterns.Any(p => UserTextMatch.Matches(value, p)))
+                if (value != null && patterns.Any(p => classes ? UserTextMatch.MatchesClass(value, p) : UserTextMatch.Matches(value, p)))
                     count += obj.Select(true) != 0 ? 1 : 0;
             }
             doc.Views.Redraw();

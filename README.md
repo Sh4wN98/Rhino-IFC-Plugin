@@ -48,7 +48,7 @@ Fortschritt steht in der Befehlszeile und in der Statusleiste, **Esc bricht ab**
 |---|---|
 | **Öffnen / Importieren** | IFC wie jede andere Datei öffnen. Ein Dialog fragt Geometrie (Polyflächen/Meshes), Blöcke, Nur Gebäudehülle und den Geometriekern; die Wahl wird gemerkt. Beim **Öffnen** übernimmt das Dokument die Einheiten der IFC-Umwandlung (Meter, Toleranz 1 mm), beim **Importieren** rechnet Rhino in die Einheiten des Dokuments um. |
 | `IfcImport` | IFC in das aktuelle Dokument importieren (Dateidialog, dann Optionen). `-IfcImport` nimmt Pfad und Optionen `Geometry=Polysurfaces/Meshes`, `Blocks`, `EnvelopeOnly` auf der Befehlszeile, für Skripte und Makros. |
-| `IfcSelect` | Objekte auswählen nach `Class` (IFC-Klasse), `Storey` (Geschoss) oder `Property` (beliebiger Benutzertext-Schlüssel, Wert mit `*` und `?` als Platzhalter). Zum Isolieren danach Rhinos `Isolate` oder `Hide`. |
+| `IfcSelect` | Objekte auswählen nach `Class` (IFC-Klasse; `IfcWall` nimmt `IfcWallStandardCase`/`…ElementedCase` mit), `Storey` (Geschoss) oder `Property` (beliebiger Benutzertext-Schlüssel, Wert mit `*` und `?` als Platzhalter). Zum Isolieren danach Rhinos `Isolate` oder `Hide`. |
 | `IfcProperties` | Benutzertext eines Objekts nach Property-Set gruppiert in der Befehlszeile; Enter ohne Objekt zeigt den IFC-Dokumenttext (Quelle, Schema, Georeferenz). |
 | `IfcConverter` | Zeigt, welcher IFC Converter benutzt wird (mit Version); `Browse` wählt `ifc-convert.exe` oder `python.exe` von Hand, `Search` sucht wieder automatisch. |
 

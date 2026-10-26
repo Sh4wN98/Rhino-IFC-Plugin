@@ -189,6 +189,17 @@ namespace RhinoIfc.Core.Tests
             Assert.Equal(expected, UserTextMatch.Matches(value, pattern));
         }
 
+        [Theory]
+        [InlineData("IfcWallStandardCase", "IfcWall", true)]
+        [InlineData("IfcSlabElementedCase", "ifcslab", true)]
+        [InlineData("IfcWall", "IfcWall", true)]
+        [InlineData("IfcStairFlight", "IfcStair", false)]
+        [InlineData("IfcWallStandardCase", "IfcWal?", false)]
+        public void ClassesTakeTheirCaseSubtypes(string ifcClass, string pattern, bool expected)
+        {
+            Assert.Equal(expected, UserTextMatch.MatchesClass(ifcClass, pattern));
+        }
+
         [Fact]
         public void Groups()
         {
