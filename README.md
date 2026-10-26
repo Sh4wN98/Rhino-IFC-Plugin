@@ -64,7 +64,7 @@ Voraussetzung: .NET SDK 8 (baut auf Windows und Linux; RhinoCommon kommt aus NuG
 
 ```powershell
 .\build.ps1                              # Tests, Release-Build, dist\ und – wenn Yak.exe gefunden wird – das .yak
-.\build.ps1 -Yak "E:\Rhino\System\Yak.exe"
+.\build.ps1 -Yak "C:\Program Files\Rhino 8\System\Yak.exe"
 ```
 
 oder von Hand:

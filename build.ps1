@@ -1,6 +1,6 @@
 # Baut das Plugin und das Yak-Paket für Rhino 8.
 #   .\build.ps1                      -> dist\  (RhinoIfc.rhp, RhinoIfc.Core.dll, manifest.yml) + .yak
-#   .\build.ps1 -Yak "E:\Rhino\System\Yak.exe"
+#   .\build.ps1 -Yak "C:\Program Files\Rhino 8\System\Yak.exe"
 param(
     [string]$Configuration = "Release",
     [string]$Yak = ""
