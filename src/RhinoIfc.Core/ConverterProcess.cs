@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -50,6 +51,28 @@ namespace RhinoIfc.Core
             return environment;
         }
 
+        /// <summary>The folder the converter starts in: the program's own (else the system folder), never Rhino's
+        /// current folder. Python puts the current folder first on its module path for <c>-c</c> and <c>-m</c>, and
+        /// Windows looks for DLLs there, so a planted <c>ifc_converter\cli.py</c> or DLL next to an opened file
+        /// would otherwise run. The converter gets absolute paths, so the folder changes nothing else.</summary>
+        public static string WorkingDirectory(string program)
+        {
+            try
+            {
+                if (ConverterLocator.IsFullyQualified(program))
+                {
+                    var folder = Path.GetDirectoryName(program);
+                    if (!string.IsNullOrEmpty(folder) && Directory.Exists(folder))
+                        return folder;
+                }
+            }
+            catch (ArgumentException)
+            {
+            }
+            var system = System.Environment.SystemDirectory;
+            return !string.IsNullOrEmpty(system) && Directory.Exists(system) ? system : Path.GetTempPath();
+        }
+
         /// <param name="onLine">Each output line, on the calling thread.</param>
         /// <param name="cancelRequested">Asked every few milliseconds; true stops the converter and its children.</param>
         /// <param name="idle">Called while waiting, on the calling thread (Rhino: RhinoApp.Wait, so the window stays alive).</param>
@@ -65,6 +88,7 @@ namespace RhinoIfc.Core
             {
                 FileName = backend.FileName,
                 Arguments = backend.CommandLine(converterArguments),
+                WorkingDirectory = WorkingDirectory(backend.FileName),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -158,6 +182,7 @@ namespace RhinoIfc.Core
                 {
                     FileName = program,
                     Arguments = CommandLineQuoting.Join(all),
+                    WorkingDirectory = WorkingDirectory(program),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
@@ -193,6 +218,7 @@ namespace RhinoIfc.Core
                 {
                     FileName = backend.FileName,
                     Arguments = backend.CommandLine(new[] { "--version" }),
+                    WorkingDirectory = WorkingDirectory(backend.FileName),
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
