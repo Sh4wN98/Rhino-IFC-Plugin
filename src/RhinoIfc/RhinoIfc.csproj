@@ -6,7 +6,7 @@
     <AssemblyName>RhinoIfc</AssemblyName>
     <RootNamespace>RhinoIfc</RootNamespace>
     <Title>IFC Import</Title>
-    <Description>Öffnet und importiert IFC-Dateien (.ifc, .ifczip) in Rhino 8, mit dem IFC Converter als Backend.</Description>
+    <Description>Öffnet und importiert IFC-Dateien (.ifc, .ifczip) direkt in Rhino 8, ohne Umwandlung.</Description>
     <GenerateResourceUsePreserializedResources>false</GenerateResourceUsePreserializedResources>
   </PropertyGroup>
 

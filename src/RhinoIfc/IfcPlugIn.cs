@@ -36,7 +36,7 @@ namespace RhinoIfc
                 settings.Options = importOptions;
                 settings.Save(Settings);
             }
-            var result = IfcImporter.Import(doc, filename, importOptions, settings.ConverterPath, options.OpenMode, !options.BatchMode);
+            var result = IfcImporter.Import(doc, filename, importOptions, options.OpenMode, !options.BatchMode);
             return result.Success;
         }
     }

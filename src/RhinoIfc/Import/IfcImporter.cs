@@ -1,13 +1,18 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using Microsoft.Win32;
+using System.Threading;
+using System.Threading.Tasks;
 using Rhino;
 using Rhino.DocObjects;
-using Rhino.FileIO;
-using Environment = System.Environment;
+using Rhino.Geometry;
 using RhinoIfc.Core;
+using RhinoIfc.Core.Geometry;
+using RhinoIfc.Core.Model;
+using RhinoIfc.Core.Step;
 
 namespace RhinoIfc.Import
 {
@@ -15,277 +20,433 @@ namespace RhinoIfc.Import
     {
         public bool Success { get; set; }
         public bool Cancelled { get; set; }
+        public int Elements { get; set; }
         public int Objects { get; set; }
         public string Message { get; set; } = "";
     }
 
-    /// <summary>Converts an IFC file with the IFC Converter into a temporary .3dm and brings that into the document:
-    /// layers by storey and IFC class, colours and materials, property sets as user text, blocks; the document
-    /// user text (source file, schema, georeferencing) separately, because Import does not take it.</summary>
+    /// <summary>Reads an IFC file directly (no conversion, no external program) and adds its elements to the document:
+    /// layers "storey::IFC class", Extrusions/polysurfaces/meshes with IFC colours, openings cut out, property sets as
+    /// user text, type geometry as blocks if wanted. The geometry is built on several cores; the objects are added on
+    /// Rhino's main thread. Esc cancels.</summary>
     public static class IfcImporter
     {
-        public static ImportResult Import(
-            RhinoDoc doc, string ifcPath, ImportOptions options, string configuredConverter, bool openMode, bool interactive)
+        private const long MaxIfcZipBytes = 64L << 30;
+
+        public static ImportResult Import(RhinoDoc doc, string ifcPath, ImportOptions options, bool openMode, bool interactive)
         {
             var result = new ImportResult();
             if (!File.Exists(ifcPath))
                 return Fail(result, $"Datei nicht gefunden: {ifcPath}", interactive);
 
-            var backend = FindConverter(configuredConverter, out var notFound);
-            if (backend == null)
-                return Fail(result, notFound, interactive);
-
-            var folder = Path.Combine(Path.GetTempPath(), "RhinoIfc", Guid.NewGuid().ToString("N").Substring(0, 12));
-            Directory.CreateDirectory(folder);
-            var output = Path.Combine(folder, Path.GetFileNameWithoutExtension(ifcPath) + ".3dm");
+            var clock = Stopwatch.StartNew();
+            var cancel = new CancellationTokenSource();
+            EventHandler onEscape = (s, e) => cancel.Cancel();
+            RhinoApp.EscapeKeyPressed += onEscape;
+            string tempFolder = null;
+            StepFile file = null;
+            bool redraw = doc.Views.RedrawEnabled;
             try
             {
-                RhinoApp.WriteLine($"IFC: {Path.GetFileName(ifcPath)} wird umgewandelt ({backend.Description}). Esc bricht ab.");
-                var run = Convert(doc, backend, ifcPath, output, options);
-                foreach (var warning in run.Warnings)
-                    RhinoApp.WriteLine($"IFC: ⚠ {warning.Text}");
-                if (run.Cancelled)
+                var name = Path.GetFileName(ifcPath);
+                RhinoApp.WriteLine($"IFC: {name} wird gelesen. Esc bricht ab.");
+                string readPath = ifcPath;
+                if (IfcZip.IsZip(ifcPath))
                 {
-                    result.Cancelled = true;
-                    result.Message = "IFC-Import abgebrochen.";
-                    RhinoApp.WriteLine(result.Message);
-                    return result;
-                }
-                if (run.ExitCode != 0 || run.Success == null || !File.Exists(output))
-                {
-                    var error = run.ErrorText();
-                    return Fail(result, "Der IFC Converter konnte die Datei nicht umwandeln"
-                        + (string.IsNullOrWhiteSpace(error) ? $" (Exitcode {run.ExitCode})." : ":" + Environment.NewLine + error), interactive);
+                    tempFolder = Path.Combine(Path.GetTempPath(), "RhinoIfc", Guid.NewGuid().ToString("N").Substring(0, 12));
+                    var progress = new Progress();
+                    readPath = Run("IFC entpacken", progress,
+                        token => IfcZip.Extract(ifcPath, tempFolder, MaxIfcZipBytes, progress.Set, token), cancel.Token);
                 }
 
-                var added = Merge(doc, output, ifcPath, openMode);
-                if (added == null)
-                    return Fail(result, "Die umgewandelte Datei konnte nicht in Rhino geladen werden.", interactive);
+                var indexProgress = new Progress();
+                file = Run("IFC lesen", indexProgress, token => StepFile.Open(readPath, indexProgress.Set, token), cancel.Token);
+                var model = Run("IFC-Struktur", new Progress(), token => IfcModel.Load(file, options, token), cancel.Token);
+                RhinoApp.WriteLine($"IFC: {file.SchemaIdentifier}, {file.EntityCount:N0} Einträge, {model.Products.Count:N0} Bauteile mit Geometrie, "
+                    + $"Längeneinheit {model.LengthUnitName} ({clock.Elapsed.TotalSeconds:0.0} s).");
 
-                bool cancelled = false;
-                EventHandler onEscape = (s, e) => cancelled = true;
-                RhinoApp.EscapeKeyPressed += onEscape;
-                try
+                // Units: opening takes the IFC's unit; importing converts into the document's.
+                double scale;
+                if (openMode)
                 {
-                    foreach (var step in ImportPostProcessors.All)
-                    {
-                        if (cancelled)
-                            break;
-                        RhinoApp.SetCommandPrompt($"IFC: {step.Name}");
-                        step.Process(doc, added, options, () => cancelled);
-                    }
+                    var unit = UnitOf(model.LengthToMetres, out var exact);
+                    doc.AdjustModelUnitSystem(unit, false);
+                    scale = exact ? 1.0 : model.LengthToMetres / RhinoMath.UnitScale(unit, UnitSystem.Meters);
+                    doc.ModelAbsoluteTolerance = 1e-4 * RhinoMath.UnitScale(UnitSystem.Meters, unit);
+                    doc.ModelAngleToleranceRadians = RhinoMath.ToRadians(1.0);
                 }
-                finally
-                {
-                    RhinoApp.EscapeKeyPressed -= onEscape;
-                }
+                else
+                    scale = model.LengthToMetres * RhinoMath.UnitScale(UnitSystem.Meters, doc.ModelUnitSystem);
+                double tolerance = doc.ModelAbsoluteTolerance / scale; // in file units
+
+                doc.Views.RedrawEnabled = false;
+                var writer = new DocumentWriter(doc, model, scale);
+                writer.CreateStoreyLayers();
+                writer.WriteDocumentText(ifcPath, openMode);
+
+                var stats = Build(doc, model, options, tolerance, writer, cancel.Token);
+                result.Elements = stats.Elements;
+                result.Objects = stats.Objects;
 
                 if (openMode)
                     foreach (var view in doc.Views)
                         view.ActiveViewport.ZoomExtents();
+                doc.Views.RedrawEnabled = redraw;
                 doc.Views.Redraw();
 
                 result.Success = true;
-                result.Objects = added.Count;
-                int elements = run.Success.Elements;
-                result.Message = $"IFC: {Path.GetFileName(ifcPath)} importiert, "
-                    + (elements >= 0 ? $"{elements} Bauteile als {added.Count} Objekte." : $"{added.Count} Objekte.");
+                result.Message = $"IFC: {name} importiert: {stats.Elements:N0} Bauteile als {stats.Objects:N0} Objekte in {clock.Elapsed.TotalSeconds:0.0} s.";
+                RhinoApp.WriteLine(result.Message);
+                stats.Report();
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                result.Cancelled = true;
+                result.Message = "IFC-Import abgebrochen; was schon importiert war, bleibt im Dokument.";
                 RhinoApp.WriteLine(result.Message);
                 return result;
             }
-            finally
+            catch (Exception exception) when (exception is IOException || exception is InvalidDataException || exception is UnauthorizedAccessException)
             {
-                try
-                {
-                    Directory.Delete(folder, true);
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
-            }
-        }
-
-        public static ConverterBackend FindConverter(string configuredPath, out string notFoundMessage)
-        {
-            var locator = new ConverterLocator(File.Exists, Environment.GetEnvironmentVariable, InstallLocations,
-                ConverterProcess.PythonHasConverter);
-            var backend = locator.Find(configuredPath);
-            notFoundMessage = backend != null ? "" :
-                "Der IFC Converter wurde nicht gefunden. Er wandelt die IFC-Datei für Rhino um und wird einmal installiert:"
-                + Environment.NewLine + ConverterLocator.DownloadUrl + Environment.NewLine
-                + "(IFC-Converter-Setup.exe). Steht er woanders, mit dem Befehl IfcConverter den Pfad zu ifc-convert.exe wählen."
-                + Environment.NewLine + "Gesucht in: " + string.Join("; ", locator.Searched.Distinct());
-            return backend;
-        }
-
-        private static IEnumerable<string> InstallLocations()
-        {
-            foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
-            {
-                foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
-                {
-                    string location = null;
-                    try
-                    {
-                        using (var root = RegistryKey.OpenBaseKey(hive, view))
-                        using (var key = root.OpenSubKey(ConverterLocator.UninstallKey))
-                            location = key?.GetValue("InstallLocation") as string;
-                    }
-                    catch (Exception exception) when (exception is System.Security.SecurityException
-                        || exception is UnauthorizedAccessException || exception is IOException || exception is PlatformNotSupportedException)
-                    {
-                    }
-                    if (!string.IsNullOrWhiteSpace(location))
-                        yield return location;
-                }
-            }
-        }
-
-        /// <summary>Runs the converter with progress in the status bar and on the command line; Esc cancels.</summary>
-        private static ConverterRun Convert(RhinoDoc doc, ConverterBackend backend, string input, string output, ImportOptions options)
-        {
-            bool cancelled = false;
-            EventHandler onEscape = (s, e) => cancelled = true;
-            RhinoApp.EscapeKeyPressed += onEscape;
-            bool meter = Rhino.UI.StatusBar.ShowProgressMeter(doc.RuntimeSerialNumber, 0, 100, "IFC", true, true) == 1;
-            string status = "IFC wird gelesen …";
-            string detail = "";
-            int percent = -1;
-            var started = DateTime.Now;
-            var lastPrompt = DateTime.MinValue;
-
-            void Prompt(bool force)
-            {
-                // The prompt is rewritten at most a few times a second; the elapsed time shows it is alive.
-                if (!force && (DateTime.Now - lastPrompt).TotalMilliseconds < 250)
-                    return;
-                lastPrompt = DateTime.Now;
-                var elapsed = DateTime.Now - started;
-                var text = percent >= 0 ? $"{percent} %" + (detail.Length > 0 ? $" – {detail}" : "") : status;
-                RhinoApp.SetCommandPrompt($"IFC: {text} ({(int)elapsed.TotalMinutes}:{elapsed.Seconds:00}, Esc bricht ab)");
-            }
-
-            try
-            {
-                Prompt(true);
-                return ConverterProcess.Run(
-                    backend,
-                    ConverterBackend.ConvertArguments(input, output, options),
-                    ConverterProcess.Environment(options),
-                    line =>
-                    {
-                        switch (line.Kind)
-                        {
-                            case OutputKind.Status:
-                                status = line.Text;
-                                percent = -1;
-                                break;
-                            case OutputKind.Percent:
-                                percent = line.Percent;
-                                if (meter)
-                                    Rhino.UI.StatusBar.UpdateProgressMeter(doc.RuntimeSerialNumber, percent, true);
-                                break;
-                            case OutputKind.Phase:
-                                detail = IsDetailPhase(line.Phase) ? line.Text : "";
-                                break;
-                            case OutputKind.Warning:
-                                RhinoApp.WriteLine($"IFC: ⚠ {line.Text}");
-                                break;
-                        }
-                        Prompt(false);
-                    },
-                    () => cancelled,
-                    () =>
-                    {
-                        RhinoApp.Wait();
-                        Prompt(false);
-                    });
+                return Fail(result, "Die IFC-Datei konnte nicht gelesen werden: " + exception.Message, interactive);
             }
             finally
             {
                 RhinoApp.EscapeKeyPressed -= onEscape;
-                if (meter)
-                    Rhino.UI.StatusBar.HideProgressMeter(doc.RuntimeSerialNumber);
+                doc.Views.RedrawEnabled = redraw;
+                RhinoApp.SetCommandPrompt("Befehl");
+                file?.Dispose();
+                if (tempFolder != null)
+                {
+                    try
+                    {
+                        Directory.Delete(tempFolder, true);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+                }
             }
         }
 
-        /// <summary>The converter's DETAIL_PHASES: long phases in which the percentage says little.</summary>
-        private static bool IsDetailPhase(string phase) =>
-            phase == "envelope" || phase == "fill" || phase == "deep" || phase == "write" || phase == "copy";
-
-        /// <summary>Imports the converted file; returns the ids of the objects added, null if it failed.</summary>
-        private static List<Guid> Merge(RhinoDoc doc, string path, string ifcPath, bool openMode)
+        private static UnitSystem UnitOf(double metres, out bool exact)
         {
-            RhinoApp.SetCommandPrompt("IFC: Modell wird geladen …");
-            // Only settings and document user text; objects and the large tables are left to Import.
-            File3dm head = null;
-            try
+            exact = true;
+            var units = new[]
             {
-                head = File3dm.Read(path,
-                    File3dm.TableTypeFilter.Properties | File3dm.TableTypeFilter.Settings | File3dm.TableTypeFilter.UserTable,
-                    File3dm.ObjectTypeFilter.None);
-            }
-            catch (Exception exception)
-            {
-                RhinoApp.WriteLine($"IFC: Einstellungen der umgewandelten Datei nicht lesbar ({exception.Message}).");
-            }
+                UnitSystem.Millimeters, UnitSystem.Centimeters, UnitSystem.Decimeters, UnitSystem.Meters, UnitSystem.Kilometers,
+                UnitSystem.Inches, UnitSystem.Feet, UnitSystem.Yards, UnitSystem.Microns,
+            };
+            foreach (var unit in units)
+                if (Math.Abs(RhinoMath.UnitScale(unit, UnitSystem.Meters) / metres - 1) < 1e-6)
+                    return unit;
+            exact = false;
+            return UnitSystem.Meters;
+        }
 
-            using (head)
+        // ------------------------------------------------------------------ geometry, in parallel
+
+        private sealed class ElementResult
+        {
+            public int Id;
+            public List<BuiltGeometry> Geometry = new List<BuiltGeometry>();
+            public List<BlockInstance> Instances = new List<BlockInstance>();
+            public List<KeyValuePair<string, string>> UserText;
+            public string Layer;
+            public bool Hidden;
+            public string Name;
+            public List<string> Problems = new List<string>();
+            public string Error;
+        }
+
+        private sealed class BlockInstance
+        {
+            public int MapId;
+            public Lazy<BlockGeometry> Definition;
+            public Transform Xform;
+        }
+
+        /// <summary>The geometry of a block definition (type geometry), built once per IfcRepresentationMap.</summary>
+        public sealed class BlockGeometry
+        {
+            public string Name;
+            public List<BuiltGeometry> Geometry = new List<BuiltGeometry>();
+        }
+
+        private sealed class Stats
+        {
+            public int Elements;
+            public int Objects;
+            public int Failed;
+            public int Empty;
+            public readonly ConcurrentDictionary<string, int> Unsupported = new ConcurrentDictionary<string, int>();
+            public readonly ConcurrentDictionary<string, int> Problems = new ConcurrentDictionary<string, int>();
+            public readonly List<string> Errors = new List<string>();
+
+            public void Report()
             {
-                if (openMode && head != null)
+                if (Empty > 0)
+                    RhinoApp.WriteLine($"IFC: {Empty:N0} Bauteile ohne lesbare Körpergeometrie.");
+                if (Unsupported.Count > 0)
+                    RhinoApp.WriteLine("IFC: Nicht unterstützte Geometrie (übersprungen): "
+                        + string.Join(", ", Unsupported.OrderByDescending(p => p.Value).Select(p => $"{p.Key} ×{p.Value}")));
+                if (Problems.Count > 0)
+                    RhinoApp.WriteLine("IFC: Hinweise (Benutzertext IfcImportNote an den Objekten): "
+                        + string.Join(", ", Problems.OrderByDescending(p => p.Value).Select(p => $"{p.Key} ×{p.Value}")));
+                if (Failed > 0)
                 {
-                    // Opening an IFC is like opening the .3dm the converter writes: its units (metres) and tolerances.
-                    doc.AdjustModelUnitSystem(head.Settings.ModelUnitSystem, false);
-                    doc.ModelAbsoluteTolerance = head.Settings.ModelAbsoluteTolerance;
-                    doc.ModelAngleToleranceDegrees = head.Settings.ModelAngleToleranceDegrees;
+                    RhinoApp.WriteLine($"IFC: {Failed:N0} Bauteile konnten nicht gebaut werden.");
+                    foreach (var error in Errors.Take(5))
+                        RhinoApp.WriteLine("  " + error);
                 }
+            }
+        }
 
-                var added = new List<Guid>();
-                EventHandler<RhinoObjectEventArgs> onAdd = (s, e) =>
-                {
-                    if (e.TheObject?.Document?.RuntimeSerialNumber == doc.RuntimeSerialNumber)
-                        added.Add(e.ObjectId);
-                };
-                RhinoDoc.AddRhinoObject += onAdd;
-                bool imported;
+        private static Stats Build(RhinoDoc doc, IfcModel model, ImportOptions options, double tolerance, DocumentWriter writer, CancellationToken cancel)
+        {
+            var stats = new Stats();
+            var builder = new ShapeBuilder(model);
+            var rhino = new RhinoGeometry(options, tolerance);
+            var blocks = new ConcurrentDictionary<int, Lazy<BlockGeometry>>();
+            var queue = new BlockingCollection<ElementResult>(boundedCapacity: 4096);
+            var products = model.Products;
+            int total = products.Count;
+            int done = 0;
+
+            var producer = Task.Run(() =>
+            {
                 try
                 {
-                    imported = doc.Import(path);
+                    var parallel = new ParallelOptions
+                    {
+                        CancellationToken = cancel,
+                        MaxDegreeOfParallelism = options.Parallel ? Math.Max(1, System.Environment.ProcessorCount - 1) : 1,
+                    };
+                    Parallel.ForEach(Partitioner.Create(0, total, Math.Max(16, Math.Min(256, total / 256 + 1))), parallel, range =>
+                    {
+                        for (int i = range.Item1; i < range.Item2; i++)
+                        {
+                            cancel.ThrowIfCancellationRequested();
+                            var element = BuildElement(products[i], model, builder, rhino, options, blocks, writer.Scale, stats);
+                            queue.Add(element, cancel);
+                        }
+                    });
                 }
                 finally
                 {
-                    RhinoDoc.AddRhinoObject -= onAdd;
+                    queue.CompleteAdding();
                 }
-                if (!imported)
-                    return null;
+            }, cancel);
 
-                if (head != null)
-                    CopyDocumentText(doc, head, openMode, ifcPath);
-                // Block definition geometry fires AddRhinoObject too; post-processing works on the model objects.
-                return added.Where(id => doc.Objects.FindId(id) is RhinoObject o && !o.IsInstanceDefinitionGeometry).ToList();
+            Rhino.UI.StatusBar.ShowProgressMeter(0, Math.Max(1, total), "IFC Geometrie", true, true);
+            var lastUpdate = Stopwatch.StartNew();
+            try
+            {
+                while (!queue.IsCompleted)
+                {
+                    if (queue.TryTake(out var element, 15))
+                    {
+                        writer.Add(element.Layer, element.Hidden, element.Name, element.UserText, element.Problems,
+                            element.Geometry, element.Instances.Select(x => Tuple.Create(x.MapId, x.Definition, x.Xform)).ToList());
+                        stats.Objects = writer.Objects;
+                        done++;
+                        if (element.Error != null)
+                        {
+                            stats.Failed++;
+                            lock (stats.Errors)
+                                stats.Errors.Add(element.Error);
+                        }
+                        else if (element.Geometry.Count == 0 && element.Instances.Count == 0)
+                            stats.Empty++;
+                        else
+                            stats.Elements++;
+                    }
+                    if (lastUpdate.ElapsedMilliseconds > 150)
+                    {
+                        lastUpdate.Restart();
+                        Rhino.UI.StatusBar.UpdateProgressMeter(done, true);
+                        RhinoApp.SetCommandPrompt($"IFC: Bauteil {done:N0} von {total:N0} (Esc bricht ab)");
+                        RhinoApp.Wait();
+                    }
+                    if (cancel.IsCancellationRequested)
+                        break;
+                }
+                try
+                {
+                    producer.Wait();
+                }
+                catch (AggregateException exception) when (exception.InnerExceptions.All(e => e is OperationCanceledException))
+                {
+                }
+                cancel.ThrowIfCancellationRequested();
             }
+            finally
+            {
+                Rhino.UI.StatusBar.HideProgressMeter();
+            }
+            return stats;
         }
 
-        /// <summary>Source file, schema, project and IfcMapConversion as document user text (Rhino: DocumentUserText).
-        /// An import into a document that already has IFC text keeps the existing values.</summary>
-        private static void CopyDocumentText(RhinoDoc doc, File3dm head, bool openMode, string ifcPath)
+        private static ElementResult BuildElement(int id, IfcModel model, ShapeBuilder builder, RhinoGeometry rhino, ImportOptions options,
+            ConcurrentDictionary<int, Lazy<BlockGeometry>> blocks, double scale, Stats stats)
         {
-            bool keep = !openMode && !string.IsNullOrEmpty(doc.Strings.GetValue("IfcSourceFile"));
-            if (keep)
+            var element = new ElementResult { Id = id };
+            try
             {
-                RhinoApp.WriteLine($"IFC: Das Dokument hat schon IFC-Dokumenttext (IfcSourceFile = {doc.Strings.GetValue("IfcSourceFile")}); "
-                    + $"der von {Path.GetFileName(ifcPath)} wird nicht übernommen.");
-                return;
+                var entity = model.File.Get(id);
+                string className = entity.ClassName;
+                element.Name = entity.String("Name");
+                element.Layer = (model.StoreyOf(id)?.Name ?? IfcModel.NoStorey) + "::" + className;
+                element.Hidden = model.IsSpace(id);
+                element.UserText = model.UserText(id);
+
+                var geometry = builder.Build(id, options.CutOpenings);
+                foreach (var pair in geometry.Unsupported)
+                    stats.Unsupported.AddOrUpdate(pair.Key, pair.Value, (k, n) => n + pair.Value);
+                if (geometry.Items.Count == 0)
+                    return element;
+
+                var fallbackColor = model.MaterialColor(id) ?? DefaultColors.Of(entity);
+                var placement = geometry.Placement;
+                var toLocal = placement.Inverse();
+                var final = RhinoGeometry.T(Mat4.Scale(scale) * placement);
+                bool hasOpenings = geometry.Openings.Count > 0;
+                bool useBlocks = options.Blocks && !hasOpenings;
+
+                var local = new List<BuiltGeometry>();
+                foreach (var item in geometry.Items)
+                {
+                    var color = item.Color ?? fallbackColor;
+                    if (useBlocks && item.MapId != 0)
+                    {
+                        if (element.Instances.Any(x => x.MapId == item.MapId && x.Xform.Equals(BlockXform(item, scale))))
+                            continue; // other items of the same map: already part of the block
+                        var mapItems = geometry.Items.Where(x => x.MapId == item.MapId && x.MapToWorld.Equals(item.MapToWorld)).ToList();
+                        var definition = blocks.GetOrAdd(item.MapId, mapId => new Lazy<BlockGeometry>(
+                            () => BuildBlock(mapId, mapItems, rhino, fallbackColor, scale, model), LazyThreadSafetyMode.ExecutionAndPublication));
+                        element.Instances.Add(new BlockInstance { MapId = item.MapId, Definition = definition, Xform = BlockXform(item, scale) });
+                        continue;
+                    }
+                    var built = rhino.Build(item.Shape, toLocal * item.ToWorld, element.Problems);
+                    foreach (var g in built)
+                        local.Add(new BuiltGeometry(g, color));
+                }
+
+                if (hasOpenings && local.Count > 0)
+                {
+                    var cutters = new List<Brep>();
+                    foreach (var opening in geometry.Openings)
+                        cutters.AddRange(rhino.ToBreps(rhino.Build(opening.Shape, toLocal * opening.ToWorld, element.Problems)));
+                    if (cutters.Count > 0)
+                    {
+                        // Each piece keeps its colour; openings are cut from every piece they touch.
+                        var cut = new List<BuiltGeometry>();
+                        foreach (var piece in local)
+                        {
+                            var pieces = rhino.Difference(new List<GeometryBase> { piece.Geometry }, cutters, element.Problems, "Öffnungen");
+                            foreach (var g in pieces)
+                                cut.Add(new BuiltGeometry(g, piece.Color));
+                        }
+                        local = cut;
+                    }
+                }
+
+                foreach (var piece in local)
+                {
+                    var g = rhino.Final(piece.Geometry);
+                    if (g == null)
+                        continue;
+                    if (!g.Transform(final) && g is Extrusion extrusion)
+                    {
+                        g = extrusion.ToBrep(true);
+                        g.Transform(final);
+                    }
+                    element.Geometry.Add(new BuiltGeometry(g, piece.Color));
+                }
+                foreach (var problem in element.Problems)
+                    stats.Problems.AddOrUpdate(problem.Split(':')[0], 1, (k, n) => n + 1);
             }
-            for (int i = 0; i < head.Strings.Count; i++)
+            catch (Exception exception) when (!(exception is OperationCanceledException))
             {
-                var key = head.Strings.GetKey(i);
-                if (!string.IsNullOrEmpty(key))
-                    doc.Strings.SetString(key, head.Strings.GetValue(i));
+                element.Error = $"#{id}: {exception.GetType().Name}: {exception.Message}";
             }
+            return element;
+        }
+
+        /// <summary>Instance transformation of a block: map → world, with the unit scale applied so that the definition
+        /// (also scaled) lands at the right size.</summary>
+        private static Transform BlockXform(ShapeItem item, double scale) =>
+            RhinoGeometry.T(Mat4.Scale(scale) * item.MapToWorld * Mat4.Scale(1 / scale));
+
+        private static BlockGeometry BuildBlock(int mapId, List<ShapeItem> items, RhinoGeometry rhino, IfcColor fallbackColor, double scale, IfcModel model)
+        {
+            var block = new BlockGeometry { Name = BlockName(mapId, model) };
+            var s = RhinoGeometry.T(Mat4.Scale(scale));
+            foreach (var item in items)
+            {
+                foreach (var g in rhino.Build(item.Shape, item.ItemToMap, null))
+                {
+                    var f = rhino.Final(g);
+                    if (f == null)
+                        continue;
+                    if (!f.Transform(s) && f is Extrusion extrusion)
+                    {
+                        f = extrusion.ToBrep(true);
+                        f.Transform(s);
+                    }
+                    block.Geometry.Add(new BuiltGeometry(f, item.Color ?? fallbackColor));
+                }
+            }
+            return block;
+        }
+
+        private static string BlockName(int mapId, IfcModel model)
+        {
+            // The type's name if the map belongs to one (IfcTypeProduct.RepresentationMaps), otherwise the map id.
+            var name = model.MapTypeName(mapId);
+            return string.IsNullOrWhiteSpace(name) ? "IFC Typ #" + mapId : name.Trim();
+        }
+
+        // ------------------------------------------------------------------ running work off the main thread
+
+        private sealed class Progress
+        {
+            private double _value;
+
+            public void Set(double value) => Volatile.Write(ref _value, value);
+
+            public double Value => Volatile.Read(ref _value);
+        }
+
+        private static T Run<T>(string label, Progress progress, Func<CancellationToken, T> work, CancellationToken cancel)
+        {
+            var task = Task.Run(() => work(cancel), cancel);
+            Rhino.UI.StatusBar.ShowProgressMeter(0, 1000, label, true, true);
+            try
+            {
+                while (!task.Wait(50))
+                {
+                    Rhino.UI.StatusBar.UpdateProgressMeter((int)(progress.Value * 1000), true);
+                    RhinoApp.SetCommandPrompt($"{label} … {progress.Value * 100:0} % (Esc bricht ab)");
+                    RhinoApp.Wait();
+                }
+            }
+            catch (AggregateException exception)
+            {
+                var inner = exception.InnerExceptions.Count == 1 ? exception.InnerException : exception;
+                if (inner is OperationCanceledException)
+                    throw inner;
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(inner).Throw();
+            }
+            finally
+            {
+                Rhino.UI.StatusBar.HideProgressMeter();
+            }
+            return task.Result;
         }
 
         private static ImportResult Fail(ImportResult result, string message, bool interactive)

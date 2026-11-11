@@ -7,12 +7,10 @@ namespace RhinoIfc.Import
     /// <summary>The options of File › Open / Import and IfcImport.</summary>
     public sealed class ImportOptionsDialog : Dialog<bool>
     {
-        private static readonly string[] Kernels = { "", "hybrid", "opencascade" };
-
         private readonly RadioButtonList _geometry;
+        private readonly CheckBox _openings;
         private readonly CheckBox _blocks;
-        private readonly CheckBox _envelope;
-        private readonly DropDown _kernel;
+        private readonly CheckBox _spaces;
         private readonly ImportOptions _options;
 
         public ImportOptionsDialog(ImportOptions options, string fileName)
@@ -23,25 +21,25 @@ namespace RhinoIfc.Import
             Padding = new Padding(12);
 
             _geometry = new RadioButtonList { Orientation = Orientation.Vertical, Spacing = new Size(0, 4) };
-            _geometry.Items.Add("Polyflächen (bearbeitbar, mit echten Öffnungen; sehr detaillierte Bauteile bleiben Meshes)");
-            _geometry.Items.Add("Nur Meshes (schneller, kleinere Datei)");
+            _geometry.Items.Add("Extrusionen und Polyflächen (bearbeitbar; sehr detaillierte Bauteile bleiben Meshes)");
+            _geometry.Items.Add("Nur Meshes (schneller, kleinere Datei, zum Ansehen und als Referenz)");
             _geometry.SelectedIndex = options.Geometry == GeometryMode.Meshes ? 1 : 0;
 
+            _openings = new CheckBox
+            {
+                Text = "Öffnungen ausschneiden (Wände, Decken mit echten Löchern für Fenster und Türen)",
+                Checked = options.CutOpenings,
+            };
             _blocks = new CheckBox
             {
-                Text = "Mehrfach platzierte Typen als Blöcke (kleiner; zum Bearbeiten Block auflösen)",
+                Text = "Mehrfach platzierte Typen als Blöcke (kleiner und schneller; zum Bearbeiten Block auflösen)",
                 Checked = options.Blocks,
             };
-            _envelope = new CheckBox
+            _spaces = new CheckBox
             {
-                Text = "Nur Gebäudehülle (Innenwände, Möbel, Haustechnik weglassen)",
-                Checked = options.EnvelopeOnly,
+                Text = "Räume (IfcSpace) importieren, auf ausgeblendeten Layern",
+                Checked = options.Spaces,
             };
-            _kernel = new DropDown();
-            _kernel.Items.Add("Standard (genau: OpenCASCADE, hybrid nur für große Netze)");
-            _kernel.Items.Add("hybrid (schneller, kann Flächen verlieren)");
-            _kernel.Items.Add("opencascade (alles mit OpenCASCADE)");
-            _kernel.SelectedIndex = System.Math.Max(0, System.Array.IndexOf(Kernels, options.Kernel ?? ""));
 
             DefaultButton = new Button { Text = "Importieren" };
             DefaultButton.Click += (s, e) => Close(true);
@@ -53,18 +51,12 @@ namespace RhinoIfc.Import
                 layout.AddRow(new Label { Text = fileName, Font = SystemFonts.Bold() });
             layout.AddRow(new Label { Text = "Geometrie" });
             layout.AddRow(_geometry);
+            layout.AddRow(_openings);
             layout.AddRow(_blocks);
-            layout.AddRow(_envelope);
-            layout.AddRow(new StackLayout
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Items = { new Label { Text = "Geometriekern" }, _kernel },
-            });
+            layout.AddRow(_spaces);
             layout.AddRow(new Label
             {
-                Text = "Die Umwandlung macht der IFC Converter im Hintergrund. Esc bricht ab.",
+                Text = "Die IFC-Datei wird direkt gelesen, ohne Umwandlung. Fortschritt in der Statusleiste, Esc bricht ab.",
                 TextColor = Colors.Gray,
             });
             layout.AddSeparateRow(null, DefaultButton, AbortButton);
@@ -77,9 +69,9 @@ namespace RhinoIfc.Import
             {
                 var options = _options.Clone();
                 options.Geometry = _geometry.SelectedIndex == 1 ? GeometryMode.Meshes : GeometryMode.Polysurfaces;
+                options.CutOpenings = _openings.Checked == true;
                 options.Blocks = _blocks.Checked == true;
-                options.EnvelopeOnly = _envelope.Checked == true;
-                options.Kernel = Kernels[System.Math.Max(0, _kernel.SelectedIndex)];
+                options.Spaces = _spaces.Checked == true;
                 return options;
             }
         }
