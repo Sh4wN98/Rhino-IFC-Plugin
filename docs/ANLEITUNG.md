@@ -14,18 +14,14 @@ Rhino 8 unter Windows. Einen Überblick über Funktionen und Aufbau gibt das [RE
 7. [Typische Arbeitsabläufe](#7-typische-arbeitsabläufe)
 8. [Update und Deinstallation](#8-update-und-deinstallation)
 9. [Fehlerbehebung](#9-fehlerbehebung)
+   [Grenzen](#grenzen)
 10. [Neue Version veröffentlichen (für Entwickler)](#10-neue-version-veröffentlichen-für-entwickler)
 
 ## 1. Voraussetzungen
 
 - **Rhino 8 für Windows** (jede Service-Release-Version).
-- **IFC Converter**: Er macht die eigentliche Umwandlung im Hintergrund. Einmal
-  `IFC-Converter-Setup.exe` aus den [Converter-Releases](https://github.com/Sh4wN98/IFC-Converter/releases/latest)
-  installieren. Python wird dafür nicht gebraucht.
 
-Das Plugin findet den Converter von selbst: über den Registry-Eintrag des Installers,
-`%LOCALAPPDATA%\Programs\IFC Converter`, `C:\Programme\IFC Converter` oder den `PATH`.
-Alternativ geht ein Python ab 3.10 mit dem Paket `ifc_converter`.
+Sonst nichts: Das Plugin liest IFC-Dateien selbst. Der IFC Converter oder Python werden **nicht** gebraucht.
 
 ## 2. Installation
 
@@ -52,15 +48,17 @@ Updates und die Deinstallation laufen dann ebenfalls über den Paketmanager.
 
 Den Ordner danach nicht verschieben oder löschen: Rhino merkt sich den Pfad zur `.rhp`.
 
+### Weg C: Entwicklungsstand testen
+
+1. Auf GitHub unter **Actions** › **build** den Lauf des gewünschten Branches öffnen.
+2. Unten das Artefakt **RhinoIfc-plugin** herunterladen und entpacken.
+3. Weiter wie bei Weg B (beide DLLs in einen Ordner, `.rhp` auf Rhino ziehen). Eine vorher installierte
+   Version zuerst deinstallieren.
+
 ### Prüfen, ob es geklappt hat
 
-In Rhino `IfcConverter` eintippen. Die Befehlszeile zeigt dann zum Beispiel:
-
-```
-IFC Converter 0.9.8: IFC Converter (installiert): C:\Users\…\AppData\Local\Programs\IFC Converter\ifc-convert.exe
-```
-
-Außerdem steht im Öffnen- und Importieren-Dialog jetzt der Dateityp **IFC (\*.ifc, \*.ifczip)**.
+Im Öffnen- und Importieren-Dialog steht jetzt der Dateityp **IFC (\*.ifc, \*.ifczip)**, und der Befehl
+`IfcImport` ist bekannt.
 
 **Das Plugin muss nicht von Hand gestartet werden.** Rhino lädt es automatisch, sobald eine IFC geöffnet
 oder einer der `Ifc…`-Befehle benutzt wird.
@@ -69,17 +67,18 @@ oder einer der `Ifc…`-Befehle benutzt wird.
 
 | Weg | Was passiert |
 |---|---|
-| **Datei › Öffnen** (oder Doppelklick auf eine `.ifc`, wenn sie mit Rhino verknüpft ist) | Die IFC wird ein **neues Dokument**. Es übernimmt die Einheiten der Umwandlung: **Meter**, Toleranz 1 mm. |
+| **Datei › Öffnen** (oder Doppelklick auf eine `.ifc`, wenn sie mit Rhino verknüpft ist) | Die IFC wird ein **neues Dokument**. Es übernimmt die Längeneinheit der IFC (meist Millimeter oder Meter), Toleranz 0,1 mm. |
 | **Datei › Importieren** oder Befehl `IfcImport` | Die IFC kommt ins **aktuelle Dokument**. Rhino rechnet in dessen Einheiten um, z. B. in Millimeter. |
 | **IFC-Datei auf das Rhino-Fenster ziehen** | Wie bei anderen Dateitypen: Rhino öffnet oder importiert sie, je nach Auswahl bzw. Einstellung. |
 
-Danach erscheint der Optionsdialog (siehe unten). Die Umwandlung läuft im Hintergrund. Fortschritt und
-Meldungen stehen in der Befehlszeile und in der Statusleiste. **Esc bricht ab.**
+Danach erscheint der Optionsdialog (siehe unten). Das Lesen läuft in drei Schritten: Index der Datei,
+Modellstruktur, Geometrie. Die Geometrie wird auf allen Prozessorkernen gebaut. Fortschritt steht in der
+Statusleiste, Meldungen in der Befehlszeile. **Esc bricht ab**; was bis dahin gebaut ist, bleibt im Dokument.
 
-Am Ende meldet die Befehlszeile zum Beispiel `IFC: Haus.ifc importiert, 412 Bauteile als 415 Objekte.`
-
-Weil die Umwandlung in einem eigenen Prozess läuft, kann ein Absturz in der IFC-Verarbeitung Rhino nicht
-mitreißen. Im schlimmsten Fall bricht nur der Import ab.
+Am Ende meldet die Befehlszeile, wie viele Bauteile als wie viele Objekte angekommen sind, und listet
+Auffälligkeiten: Bauteile ohne lesbare Geometrie, nicht unterstützte Geometrietypen und Hinweise wie
+„Öffnung nicht ausgeschnitten“. Die betroffenen Objekte tragen den Hinweis im Benutzertext `IfcImportNote`,
+man findet sie mit `-_IfcSelect _Property IfcImportNote *`.
 
 ## 4. Die Importoptionen
 
@@ -87,25 +86,32 @@ Der Dialog **IFC importieren** merkt sich die letzte Wahl.
 
 | Option | Bedeutung |
 |---|---|
-| **Polyflächen** (Standard) | Bearbeitbare Polyflächen mit echten Öffnungen. Sehr detaillierte Bauteile (über 1000 Dreiecke) und facettierte Rundkörper bleiben Meshes. |
-| **Nur Meshes** | Alles als Mesh. Schneller und kleinere Datei, aber nicht als Volumen bearbeitbar. Gut zum Anschauen und für Renderings. |
-| **Mehrfach platzierte Typen als Blöcke** | Gleiche Bauteile (Fenster, Türen, Stützen …) werden Blockinstanzen. Spart Speicher. Zum Bearbeiten den Block mit `_ExplodeBlock` auflösen. |
-| **Nur Gebäudehülle** | Lässt Innenwände, Möbel und Haustechnik weg. Gut für Umgebungs- und Volumenmodelle. |
-| **Geometriekern** | *Standard*: genau (OpenCASCADE, hybrid nur bei großen Netzen). *hybrid*: schneller, kann aber Flächen verlieren. *opencascade*: alles mit OpenCASCADE. Normalerweise auf Standard lassen. |
+| **Polyflächen** (Standard) | Bearbeitbare Körper: Extrusionen, Polyflächen, Rotationskörper, Rohre. Facettierte Körper werden zu Polyflächen mit zusammengefassten ebenen Flächen. Sehr detaillierte Netze (über 2000 Dreiecke) bleiben Meshes. |
+| **Nur Meshes** | Alles als Mesh. Schneller und kleinere Datei, aber nicht als Volumen bearbeitbar. Gut zum Anschauen und für sehr große Modelle. |
+| **Öffnungen ausschneiden** (Standard an) | Wände und Decken bekommen echte Löcher für Fenster und Türen (`IfcOpeningElement`). Aus: schneller, die Bauteile bleiben geschlossen. |
+| **Mehrfach platzierte Typen als Blöcke** | Bauteile, deren Geometrie aus einem Typ kommt (`IfcRepresentationMap`, z. B. Fenster, Türen, Möbel) und die keine Öffnungen haben, werden Blockinstanzen. Der Block heißt wie der Typ. Spart Speicher. Zum Bearbeiten `_ExplodeBlock`. |
+| **Räume importieren** (Standard an) | `IfcSpace` als Körper auf ausgeblendeten Layern. |
 
 ## 5. Was in Rhino ankommt
 
 - **Layer nach Geschoss und IFC-Klasse**, z. B. `EG::IfcWall` oder `1.OG::IfcWindow`.
-  - Elemente ohne Geschoss liegen unter `Ohne Geschoss`.
-  - Achsen liegen unter `Achsen`.
+  - Geschosse sind nach Höhe sortiert. Elemente ohne Geschoss liegen unter `Ohne Geschoss`.
   - `IfcSpace`-Layer (Räume) sind beim Start ausgeblendet.
-- **Farben und Materialien** aus den IFC-Styles.
+  - Blockdefinitionen liegen auf `IFC Blockdefinitionen`.
+- **Farben und Materialien** aus den IFC-Styles (mit Transparenz für Glas), sonst aus dem Material, sonst eine
+  Standardfarbe je Klasse.
+- **Gruppen**: Besteht ein Bauteil aus mehreren Rhino-Objekten, sind sie zu einer Gruppe mit der GlobalId
+  zusammengefasst.
 - **Benutzertext je Objekt** (Eigenschaften › Attribut-Benutzertext):
-  - `IfcGlobalId`, `IfcClass`, `IfcName`, `IfcType`, `IfcObjectType`, `IfcTag`, `IfcStorey`
+  - `IfcGlobalId`, `IfcClass`, `IfcName`, `IfcDescription`, `IfcType`, `IfcTypeClass`, `IfcPredefinedType`,
+    `IfcObjectType`, `IfcTag`, `IfcStorey`, `IfcMaterial`
   - alle Property-Sets und Mengen als `Pset.Eigenschaft`, z. B. `Pset_WallCommon.IsExternal = True` oder
     `BaseQuantities.GrossVolume = 0.8975`
 - **Dokument-Benutzertext** (`_DocumentProperties` › Benutzertext): `IfcSourceFile`, `IfcSchema`,
-  `IfcProject` und, wenn vorhanden, die Georeferenzierung `IfcMapConversion.*`.
+  `IfcProject`, `IfcOriginatingSystem`, `IfcLengthUnit` und, wenn vorhanden, die Georeferenzierung
+  `IfcMapConversion.*` und `IfcSite.Ref*`.
+- **Koordinaten**: wie in der IFC, ohne Verschiebung. Modelle in Landeskoordinaten liegen also weit vom
+  Ursprung; die Geometrie wird trotzdem genau gebaut (erst lokal, dann verschoben).
 
 Das Ergebnis ist eine normale Rhino-Geometrie. Speichern als `.3dm` wie gewohnt. **Ein Export zurück nach
 IFC ist nicht vorgesehen.**
@@ -117,12 +123,12 @@ IFC ist nicht vorgesehen.**
 Importiert eine IFC ins aktuelle Dokument: erst der Dateidialog, dann die Optionen.
 
 Mit Bindestrich (`-IfcImport`) läuft alles über die Befehlszeile, ohne Dialog. Das ist für Skripte,
-Makros und Werkzeugleisten-Knöpfe gedacht. Optionen: `Geometry=Polysurfaces|Meshes`, `Blocks=Yes|No`,
-`EnvelopeOnly=Yes|No`.
+Makros und Werkzeugleisten-Knöpfe gedacht. Optionen: `Geometry=Polysurfaces|Meshes`, `Openings=Yes|No`,
+`Blocks=Yes|No`, `Spaces=Yes|No`.
 
 ```
 -_IfcImport "C:\Projekte\Haus 1.ifc"
--_IfcImport _Geometry=_Meshes _EnvelopeOnly=_Yes "C:\Projekte\Haus 1.ifc"
+-_IfcImport _Geometry=_Meshes _Openings=_No _Spaces=_No "C:\Projekte\Haus 1.ifc"
 ```
 
 ### `IfcSelect`
@@ -153,13 +159,6 @@ Zeigt den IFC-Benutzertext eines Objekts in der Befehlszeile, gruppiert nach Pro
 `[Pset_WallCommon]`, `[BaseQuantities]` …). Enter ohne Objekt zeigt den IFC-Dokumenttext
 (Quelldatei, Schema, Georeferenz). Mit `F2` lässt sich die Befehlszeile vergrößert ansehen.
 
-### `IfcConverter`
-
-Zeigt, welcher IFC Converter benutzt wird, mit Version.
-
-- `Browse`: `ifc-convert.exe` oder ein `python.exe` mit `ifc_converter` von Hand wählen.
-- `Search`: wieder automatisch suchen.
-
 ## 7. Typische Arbeitsabläufe
 
 **Ein Geschoss allein anzeigen**
@@ -177,12 +176,12 @@ Mit `_Unisolate` kommt alles zurück. Alternativ in der Layer-Palette die andere
 -_IfcSelect _Property Pset_WallCommon.IsExternal True
 ```
 
-**Nur ein Volumenmodell der Hülle**
+**Sehr große Modelle schnell ansehen**
 
-Import mit **Nur Gebäudehülle** und **Nur Meshes**, z. B. für Umgebungsmodelle:
+Import mit **Nur Meshes**, ohne Öffnungen und ohne Räume:
 
 ```
--_IfcImport _Geometry=_Meshes _EnvelopeOnly=_Yes "C:\Projekte\Nachbargebäude.ifc"
+-_IfcImport _Geometry=_Meshes _Openings=_No _Spaces=_No "C:\Projekte\Gesamtmodell.ifc"
 ```
 
 **IFC-Modell in ein bestehendes Projekt einfügen**
@@ -208,14 +207,26 @@ Wer von Weg B auf Weg A wechselt, deinstalliert zuerst die Version von Hand.
 
 | Problem | Lösung |
 |---|---|
-| **„Der IFC Converter wurde nicht gefunden.“** | Converter installieren (siehe Voraussetzungen) oder mit `IfcConverter` › `Browse` den Pfad zu `ifc-convert.exe` angeben. |
-| **IFC fehlt im Dateityp-Filter** | `_PlugInManager` öffnen, nach „IFC Import“ suchen und prüfen, ob es aktiviert ist. Sonst die `.rhp` neu installieren und Rhino neu starten. |
-| **Umwandlung dauert sehr lange** | Große Modelle brauchen Minuten. Schneller geht es mit **Nur Meshes**, **Nur Gebäudehülle** oder dem Kern *hybrid*. Esc bricht jederzeit ab. |
-| **Kein Fortschritt in Prozent** | Converter 0.9.8 und älter melden nur die verstrichene Zeit. Neuere Versionen zeigen Prozent. |
-| **Bauteile fehlen oder sind Meshes statt Polyflächen** | Sehr detaillierte und gerundete Bauteile bleiben absichtlich Meshes. Fehlende Flächen: Kern auf *Standard* oder *opencascade* stellen. Warnungen des Converters stehen in der Befehlszeile mit ⚠. |
+| **IFC fehlt im Dateityp-Filter** | `_PlugInManager` öffnen, nach „IFC Import“ suchen und prüfen, ob es aktiviert ist. Sonst die `.rhp` neu installieren und Rhino neu starten. `RhinoIfc.Core.dll` muss neben der `.rhp` liegen. |
+| **Import dauert sehr lange** | Meist sind es die Öffnungen (Boolesche Operationen) im Polyflächen-Modus. Schneller: **Nur Meshes** oder **Öffnungen ausschneiden** aus. Esc bricht jederzeit ab. |
+| **Öffnung nicht ausgeschnitten** | Rhinos Boolean ist an dem Bauteil gescheitert; das Bauteil kommt geschlossen an und trägt `IfcImportNote`. Auswahl: `-_IfcSelect _Property IfcImportNote *`. |
+| **Bauteile fehlen** | Die Befehlszeile listet „Nicht unterstützte Geometrie“ mit Typnamen (siehe Grenzen) und Bauteile ohne lesbare Körpergeometrie. |
 | **Hinweis „Das Dokument hat schon IFC-Dokumenttext“** | Es wurde bereits eine IFC in dieses Dokument importiert. Die Geometrie kommt trotzdem an, der Dokumenttext der ersten IFC bleibt erhalten. |
-| **Modell liegt sehr weit vom Ursprung** | Die IFC nutzt Landeskoordinaten. In Rhino `_Zoom _Extents`. Die Verschiebung steht im Dokument-Benutzertext. |
-| **Import bricht mit Fehlermeldung ab** | Die Meldung aus der Befehlszeile (`F2`) kopieren. Zum Gegentest die Datei im IFC Converter selbst umwandeln. Klappt es dort auch nicht, liegt es an der IFC-Datei. |
+| **Modell liegt sehr weit vom Ursprung** | Die IFC nutzt Landeskoordinaten. In Rhino `_Zoom _Extents`. Die Georeferenz steht im Dokument-Benutzertext. |
+| **Import bricht mit Fehlermeldung ab** | Die Meldung aus der Befehlszeile (`F2`) kopieren und zusammen mit der Information, welche Datei es war, melden. |
+
+## Grenzen
+
+Nicht oder nur teilweise unterstützt (die Befehlszeile nennt sie beim Import):
+
+- `IfcSurfaceCurveSweptAreaSolid`, `IfcFixedReferenceSweptAreaSolid`, `IfcSectionedSolidHorizontal` und
+  andere Infrastruktur-Körper aus IFC4X3 (Trassen) sowie Achsen und `IfcLine` als Leitkurve.
+- `IfcAdvancedBrep` mit gekrümmten Flächen außer B-Spline-Flächen (andere gekrümmte Flächen werden über ihre
+  Randkurven angenähert).
+- `IfcArbitraryOpenProfileDef` (offene Profile, z. B. für Bleche) und `IfcGeometricSet` (Kurven/Punkte).
+- Bei `IfcSweptDiskSolid` werden `StartParam`/`EndParam` nicht ausgewertet (das ganze Leitkurvenstück wird
+  benutzt).
+- Kein Export zurück nach IFC.
 
 ## 10. Neue Version veröffentlichen (für Entwickler)
 

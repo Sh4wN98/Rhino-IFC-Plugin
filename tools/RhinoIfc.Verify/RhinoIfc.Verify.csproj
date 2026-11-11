@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Developer tool: reads an IFC file with RhinoIfc.Core (no Rhino) and writes per element the bounding box and
+       volume in metres as JSON lines, to check the geometry against other IFC readers. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RhinoIfc.Core\RhinoIfc.Core.csproj" />
+  </ItemGroup>
+</Project>

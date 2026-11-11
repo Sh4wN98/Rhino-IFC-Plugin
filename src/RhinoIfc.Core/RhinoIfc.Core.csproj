@@ -1,8 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Everything that does not need Rhino: finding the converter, its command line, reading its output.
-       Tested on any platform with tests/RhinoIfc.Core.Tests. -->
+  <!-- Everything that does not need Rhino: reading IFC files (STEP), the building structure, properties, units,
+       placements and the geometry description. No third-party packages. Tested on any platform with
+       tests/RhinoIfc.Core.Tests. -->
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <RootNamespace>RhinoIfc.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Schema\ifc-schemas.txt" LogicalName="RhinoIfc.Core.ifc-schemas.txt" />
+  </ItemGroup>
 </Project>

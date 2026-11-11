@@ -1,12 +1,13 @@
 namespace RhinoIfc.Core
 {
-    /// <summary>How the IFC Converter builds the Rhino geometry.</summary>
+    /// <summary>How the import builds the Rhino geometry.</summary>
     public enum GeometryMode
     {
-        /// <summary>Joined polysurfaces; very detailed elements stay meshes (converter: <c>-g brep</c>).</summary>
+        /// <summary>Extrusions and joined polysurfaces with real openings; very detailed or curved faceted elements
+        /// stay meshes.</summary>
         Polysurfaces,
 
-        /// <summary>Meshes only (converter: <c>-g mesh</c>).</summary>
+        /// <summary>Meshes only: fastest, smallest, for viewing and reference.</summary>
         Meshes,
     }
 
@@ -15,17 +16,21 @@ namespace RhinoIfc.Core
     {
         public GeometryMode Geometry { get; set; } = GeometryMode.Polysurfaces;
 
-        /// <summary>Type geometry placed several times becomes Rhino blocks (<c>--blocks</c>).</summary>
+        /// <summary>Type geometry placed several times (IfcMappedItem) becomes Rhino block instances.</summary>
         public bool Blocks { get; set; }
 
-        /// <summary>Only the building hull (<c>--envelope</c>).</summary>
-        public bool EnvelopeOnly { get; set; }
+        /// <summary>Openings (IfcOpeningElement) are cut out of walls, slabs … with a Boolean difference.</summary>
+        public bool CutOpenings { get; set; } = true;
 
-        /// <summary>accurate, hybrid or opencascade; null or empty: the converter's default.</summary>
-        public string Kernel { get; set; }
+        /// <summary>Rooms (IfcSpace) are imported, on layers that start hidden.</summary>
+        public bool Spaces { get; set; } = true;
 
-        /// <summary>Language of the converter's messages (en, de, …); null: English.</summary>
-        public string Language { get; set; }
+        /// <summary>Build the geometry on several processor cores.</summary>
+        public bool Parallel { get; set; } = true;
+
+        /// <summary>Faceted elements with more triangles than this stay meshes in polysurface mode (joining them would be
+        /// slow and gives no editable result).</summary>
+        public int MaxPolysurfaceTriangles { get; set; } = 2000;
 
         public ImportOptions Clone() => (ImportOptions)MemberwiseClone();
     }
